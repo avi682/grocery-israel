@@ -98,9 +98,9 @@ async function processChainData(chainId, url) {
 
 async function main() {
   const chains = [
-    { id: 'שופרסל', url: "https://pricesprodpublic.blob.core.windows.net/price/Price7290027600007-001-202603121900.gz?sv=2014-02-14&sr=b&sig=F6AT4j8C4lndIhvyYRKT%2BYYGe2F%2FVVH3wAznVmW0Nh0%3D&se=2026-03-12T18%3A36%3A16Z&sp=r" },
-    { id: 'אושר עד', url: "..." }, // Will be added as portal URLs are discovered
-    { id: 'רמי לוי', url: "..." },
+    { id: 'שופרסל', url: "https://pricesprodpublic.blob.core.windows.net/pricefull/PriceFull7290027600007-001-202603120300.gz?sv=2014-02-14&sr=b&sig=I6HYFmajs9GbdNCPqChZnINUPT213d1V4Go5J6CFSOQ%3D&se=2026-03-12T21%3A20%3A49Z&sp=r" },
+    { id: 'רמי לוי', url: "https://url.retail.publishedprices.co.il/file/d/PriceFull7290058140886-006-202603121800.gz" },
+    { id: 'אושר עד', url: "..." },
     { id: 'יוחננוף', url: "..." },
     { id: 'יש חסד', url: "..." }
   ];
