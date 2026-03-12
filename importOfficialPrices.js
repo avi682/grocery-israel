@@ -92,9 +92,16 @@ async function discoverOsherAdUrl() {
               const freshToken = freshCsrfMatch ? freshCsrfMatch[1] : csrfToken;
               console.log("Dashboard session established.");
 
-              // 4. POST /file/json/dir (The actual API call)
+              // 4. POST /file/json/dir (Full payload from browser)
               const listParams = new URLSearchParams({
-                sEcho: '1', iDisplayLength: '1000', cd: '/', csrftoken: freshToken
+                sEcho: '1', iColumns: '5', sColumns: ',,,,', iDisplayStart: '0', iDisplayLength: '1000',
+                mDataProp_0: 'fname', sSearch_0: '', bRegex_0: 'false', bSearchable_0: 'true', bSortable_0: 'true',
+                mDataProp_1: 'typeLabel', sSearch_1: '', bRegex_1: 'false', bSearchable_1: 'true', bSortable_1: 'false',
+                mDataProp_2: 'size', sSearch_2: '', bRegex_2: 'false', bSearchable_2: 'true', bSortable_2: 'true',
+                mDataProp_3: 'ftime', sSearch_3: '', bRegex_3: 'false', bSearchable_3: 'true', bSortable_3: 'true',
+                mDataProp_4: '', sSearch_4: '', bRegex_4: 'false', bSearchable_4: 'true', bSortable_4: 'false',
+                sSearch: '', bRegex: 'false', iSortingCols: '0', 
+                cd: '/', csrftoken: freshToken
               }).toString();
 
               const listReq = https.request({
@@ -105,6 +112,7 @@ async function discoverOsherAdUrl() {
                   'Content-Length': listParams.length,
                   'Cookie': getCookieStr(),
                   'x-requested-with': 'XMLHttpRequest',
+                  'x-csrftoken': freshToken, // Often required for AJAX JSON calls
                   'Referer': `https://${hostname}/file`
                 },
                 rejectUnauthorized: false
