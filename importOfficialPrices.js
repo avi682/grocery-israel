@@ -67,7 +67,7 @@ async function processChainData(chainId, url) {
         let match;
         const updates = [];
         
-        while ((match = itemRegex.exec(xmlData)) !== null) {
+        while ((match = itemRegex.exec(xmlData)) !== null && updates.length < 5000) {
           const itemXml = match[1];
           const name = cleanStr(itemXml.match(/<ItemName>(.*?)<\/ItemName>/)?.[1]);
           const price = parseFloat(itemXml.match(/<ItemPrice>(.*?)<\/ItemPrice>/)?.[1]);
