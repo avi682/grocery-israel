@@ -1,5 +1,6 @@
 /**
- * importOfficialPrices.js (Phase 5: Fully Autonomous Crawler)
+ * importOfficialPrices.js (Phase 5/6: Fully Autonomous & Randomized)
+ * Fixes: AJAX Shufersal discovery, Nested price structure, Brand filtering, Randomization.
  */
 
 import { initializeApp } from "firebase/app";
@@ -23,23 +24,28 @@ const ITEM_LIMIT_PER_RUN = 3500;
 const cleanStr = (str) => str ? str.replace(/&amp;/g, '&').replace(/&quot;/g, '"').trim() : '';
 
 /**
- * Fetches the Shufersal portal and finds the latest PriceFull link for store 001.
+ * Discovers Shufersal URL using the AJAX endpoint.
  */
 async function discoverShufersalUrl() {
-  console.log("Discovering latest Shufersal URL...");
+  console.log("Discovering latest Shufersal URL via AJAX...");
   return new Promise((resolve) => {
-    https.get("https://prices.shufersal.co.il/", (res) => {
+    const options = {
+      hostname: 'prices.shufersal.co.il',
+      path: '/FileObject/UpdateCategory?catID=2&storeId=1', // PriceFull for Store 1
+      headers: { 'x-requested-with': 'XMLHttpRequest' }
+    };
+    
+    https.get(options, (res) => {
       let data = '';
       res.on('data', (chunk) => data += chunk);
       res.on('end', () => {
-        // Regex to find a PriceFull link for store 001 (usually ends in .gz with security tokens)
-        const regex = /href="(https:\/\/pricesprodpublic\.blob\.core\.windows\.net\/pricefull\/PriceFull7290027600007-001-[^"]+\.gz[^"]+)"/;
+        const regex = /href="(https:\/\/pricesprodpublic\.blob\.core\.windows\.net\/pricefull\/PriceFull[^"]+\.gz[^"]+)"/;
         const match = data.match(regex);
         if (match) {
           console.log("Found Shufersal URL:", match[1]);
           resolve(match[1]);
         } else {
-          console.warn("Could not find Shufersal URL on portal.");
+          console.warn("Could not find Shufersal URL in AJAX response.");
           resolve(null);
         }
       });
@@ -51,10 +57,19 @@ async function discoverShufersalUrl() {
 }
 
 /**
- * Robust processing of a single chain file.
+ * Discovers Rami Levy URL.
+ * Note: Rami Levy portals often require a session cookie. 
+ * We try to fetch the public file list index if available.
  */
+async function discoverRamiLevyUrl() {
+  console.log("Attempting Rami Levy discovery...");
+  // Rami Levy usually lists files at a predictable path if authenticated.
+  // For now, we return a known pattern or null if we can't automate the session easily.
+  return null; 
+}
+
 async function processChainData(chainId, url) {
-  if (!url) return 0;
+  if (!url || url === "...") return 0;
   console.log(`Downloading and processing ${chainId}...`);
   
   return new Promise((resolve) => {
@@ -73,6 +88,7 @@ async function processChainData(chainId, url) {
         const itemRegex = /<Item>([\s\S]*?)<\/Item>/g;
         let match;
         const allValidItems = [];
+        
         while ((match = itemRegex.exec(xmlData)) !== null) {
           const itemXml = match[1];
           const name = cleanStr(itemXml.match(/<ItemName>(.*?)<\/ItemName>/)?.[1]);
@@ -85,14 +101,13 @@ async function processChainData(chainId, url) {
           }
         }
 
-        // Shuffle the results to get a random mix each day
+        // Randomize the selection to grow the database over time
         for (let i = allValidItems.length - 1; i > 0; i--) {
           const j = Math.floor(Math.random() * (i + 1));
           [allValidItems[i], allValidItems[j]] = [allValidItems[j], allValidItems[i]];
         }
 
         const updates = allValidItems.slice(0, ITEM_LIMIT_PER_RUN);
-
         if (updates.length > 0) {
           const batch = writeBatch(db);
           for (const item of updates) {
@@ -116,30 +131,30 @@ async function processChainData(chainId, url) {
       console.error(`Request error for ${chainId}:`, e.message);
       resolve(0);
     });
-    request.setTimeout(15000, () => { request.destroy(); resolve(0); });
+    request.setTimeout(30000, () => { request.destroy(); resolve(0); });
   });
 }
 
 async function main() {
-  try {
-    const shufersalUrl = await discoverShufersalUrl();
-    
-    const chains = [
-      { id: 'שופרסל', url: shufersalUrl },
-      // Rami Levy and others can be added with their own discovery helpers
-    ];
+  const shufersalUrl = await discoverShufersalUrl();
+  const ramiLevyUrl = await discoverRamiLevyUrl();
 
-    for (const chain of chains) {
+  const chains = [
+    { id: 'שופרסל', url: shufersalUrl },
+    { id: 'רמי לוי', url: ramiLevyUrl },
+  ];
+
+  for (const chain of chains) {
+    if (chain.url) {
       const imported = await processChainData(chain.id, chain.url);
       console.log(`Finished ${chain.id}: Imported ${imported} items.`);
+    } else {
+      console.warn(`Skipping ${chain.id}: No valid URL discovered.`);
     }
-
-    console.log("Autonomous sync complete.");
-    process.exit(0);
-  } catch (err) {
-    console.error("Critical error in main:", err);
-    process.exit(1);
   }
+
+  console.log("Autonomous sync complete.");
+  process.exit(0);
 }
 
 main();
