@@ -46,7 +46,8 @@ async function discoverOsherAdUrl() {
       
       res.on('data', chunk => html += chunk);
       res.on('end', () => {
-        const csrfMatch = html.match(/name="csrftoken" value="([^"]+)"/);
+        // The token is in a meta tag: <meta name="csrftoken" content="..."/>
+        const csrfMatch = html.match(/name="csrftoken" (?:content|value)="([^"]+)"/);
         const csrfToken = csrfMatch ? csrfMatch[1] : null;
 
         if (!csrfToken) {
