@@ -1,5 +1,5 @@
 /**
- * importOfficialPrices.js (Refined: 3,500 limit + Multiple Chains)
+ * importOfficialPrices.js (Phase 5: Fully Autonomous Crawler)
  */
 
 import { initializeApp } from "firebase/app";
@@ -22,35 +22,47 @@ const db = getFirestore(app);
 const ITEM_LIMIT_PER_RUN = 3500;
 const cleanStr = (str) => str ? str.replace(/&amp;/g, '&').replace(/&quot;/g, '"').trim() : '';
 
-async function seedFallbackData() {
-  console.log("Seeding fallback Master Catalog data for all chains...");
-  const batch = writeBatch(db);
-  const fallbackProducts = [
-    { barcode: "7290000042405", name: "חלב תנובה 3% ליטר", brand: "תנובה", prices: { "שופרסל": 6.20, "ויקטורי": 5.90, "רמי לוי": 5.80, "אושר עד": 5.70, "יוחננוף": 5.80, "יש חסד": 5.75 } },
-    { barcode: "7290000066319", name: "גבינת עמק פרוסה 200 גרם", brand: "תנובה", prices: { "שופרסל": 15.90, "ויקטורי": 14.50, "רמי לוי": 14.90, "אושר עד": 13.90, "יוחננוף": 14.20, "יש חסד": 13.90 } },
-    { barcode: "7280000000001", name: "קוקה קולה 1.5 ליטר", brand: "החברה המרכזית", prices: { "שופרסל": 8.50, "ויקטורי": 7.50, "רמי לוי": 7.20, "אושר עד": 6.90, "יוחננוף": 7.10, "יש חסד": 6.90 } }
-  ];
-
-  fallbackProducts.forEach(p => {
-    const docRef = doc(db, 'master_catalog', p.barcode);
-    batch.set(docRef, {
-      name: p.name,
-      brand: p.brand,
-      updated_at: new Date(),
-      prices: p.prices
-    }, { merge: true });
+/**
+ * Fetches the Shufersal portal and finds the latest PriceFull link for store 001.
+ */
+async function discoverShufersalUrl() {
+  console.log("Discovering latest Shufersal URL...");
+  return new Promise((resolve) => {
+    https.get("https://prices.shufersal.co.il/", (res) => {
+      let data = '';
+      res.on('data', (chunk) => data += chunk);
+      res.on('end', () => {
+        // Regex to find a PriceFull link for store 001 (usually ends in .gz with security tokens)
+        const regex = /href="(https:\/\/pricesprodpublic\.blob\.core\.windows\.net\/pricefull\/PriceFull7290027600007-001-[^"]+\.gz[^"]+)"/;
+        const match = data.match(regex);
+        if (match) {
+          console.log("Found Shufersal URL:", match[1]);
+          resolve(match[1]);
+        } else {
+          console.warn("Could not find Shufersal URL on portal.");
+          resolve(null);
+        }
+      });
+    }).on('error', (e) => {
+      console.error("Shufersal discovery error:", e.message);
+      resolve(null);
+    });
   });
-
-  await batch.commit();
 }
 
+/**
+ * Robust processing of a single chain file.
+ */
 async function processChainData(chainId, url) {
-  if (!url || url.includes("...")) return 0;
-  console.log(`Processing ${chainId}...`);
+  if (!url) return 0;
+  console.log(`Downloading and processing ${chainId}...`);
   
   return new Promise((resolve) => {
     const request = https.get(url, (res) => {
-      if (res.statusCode !== 200) return resolve(0);
+      if (res.statusCode !== 200) {
+        console.warn(`HTTP error ${res.statusCode} for ${chainId}`);
+        return resolve(0);
+      }
 
       const gunzip = zlib.createGunzip();
       res.pipe(gunzip);
@@ -76,43 +88,51 @@ async function processChainData(chainId, url) {
           }
         }
 
-        const batch = writeBatch(db);
-        for (const item of updates) {
-          const docRef = doc(db, 'master_catalog', item.barcode);
-          batch.set(docRef, {
-            name: item.name,
-            brand: item.brand,
-            updated_at: new Date(),
-            [`prices.${item.chainId}`]: item.price
-          }, { merge: true });
+        if (updates.length > 0) {
+          const batch = writeBatch(db);
+          for (const item of updates) {
+            const docRef = doc(db, 'master_catalog', item.barcode);
+            batch.set(docRef, {
+              name: item.name,
+              brand: item.brand,
+              updated_at: new Date(),
+              [`prices.${item.chainId}`]: item.price
+            }, { merge: true });
+          }
+          await batch.commit();
         }
-        await batch.commit();
         resolve(count);
       });
     });
 
-    request.on('error', () => resolve(0));
-    request.setTimeout(10000, () => { request.destroy(); resolve(0); });
+    request.on('error', (e) => {
+      console.error(`Request error for ${chainId}:`, e.message);
+      resolve(0);
+    });
+    request.setTimeout(15000, () => { request.destroy(); resolve(0); });
   });
 }
 
 async function main() {
-  const chains = [
-    { id: 'שופרסל', url: "https://pricesprodpublic.blob.core.windows.net/pricefull/PriceFull7290027600007-001-202603120300.gz?sv=2014-02-14&sr=b&sig=I6HYFmajs9GbdNCPqChZnINUPT213d1V4Go5J6CFSOQ%3D&se=2026-03-12T21%3A20%3A49Z&sp=r" },
-    { id: 'רמי לוי', url: "https://url.retail.publishedprices.co.il/file/d/PriceFull7290058140886-006-202603121800.gz" },
-    { id: 'אושר עד', url: "..." },
-    { id: 'יוחננוף', url: "..." },
-    { id: 'יש חסד', url: "..." }
-  ];
+  try {
+    const shufersalUrl = await discoverShufersalUrl();
+    
+    const chains = [
+      { id: 'שופרסל', url: shufersalUrl },
+      // Rami Levy and others can be added with their own discovery helpers
+    ];
 
-  for (const chain of chains) {
-    const imported = await processChainData(chain.id, chain.url);
-    if (imported > 0) console.log(`Imported ${imported} items for ${chain.id}`);
+    for (const chain of chains) {
+      const imported = await processChainData(chain.id, chain.url);
+      console.log(`Finished ${chain.id}: Imported ${imported} items.`);
+    }
+
+    console.log("Autonomous sync complete.");
+    process.exit(0);
+  } catch (err) {
+    console.error("Critical error in main:", err);
+    process.exit(1);
   }
-
-  await seedFallbackData();
-  console.log("Sync complete.");
-  process.exit(0);
 }
 
 main();
