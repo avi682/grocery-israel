@@ -23,41 +23,6 @@ const db = getFirestore(app);
 const ITEM_LIMIT_PER_RUN = 3500;
 const cleanStr = (str) => str ? str.replace(/&amp;/g, '&').replace(/&quot;/g, '"').trim() : '';
 
-/**
- * Discovers Shufersal URL using the AJAX endpoint.
- */
-async function discoverShufersalUrl() {
-  console.log("Discovering latest Shufersal URL via AJAX...");
-  return new Promise((resolve) => {
-    const options = {
-      hostname: 'prices.shufersal.co.il',
-      path: '/FileObject/UpdateCategory?catID=2&storeId=1', // PriceFull for Store 1
-      headers: { 'x-requested-with': 'XMLHttpRequest' },
-      rejectUnauthorized: false // Bypass certificate issues on public portal
-    };
-    
-    https.get(options, (res) => {
-      let data = '';
-      res.on('data', (chunk) => data += chunk);
-      res.on('end', () => {
-        const regex = /href="(https:\/\/pricesprodpublic\.blob\.core\.windows\.net\/pricefull\/PriceFull[^"]+\.gz[^"]+)"/;
-        const match = data.match(regex);
-        if (match) {
-          // Fix &amp; to & in the URL
-          const url = match[1].replace(/&amp;/g, '&');
-          console.log("Found Shufersal URL:", url);
-          resolve(url);
-        } else {
-          console.warn("Could not find Shufersal URL in AJAX response.");
-          resolve(null);
-        }
-      });
-    }).on('error', (e) => {
-      console.error("Shufersal discovery error:", e.message);
-      resolve(null);
-    });
-  });
-}
 
 /**
  * Discovers Osher Ad URL.
@@ -215,12 +180,10 @@ async function processChainData(chainId, url) {
 
 async function main() {
   const osherAdUrl = await discoverOsherAdUrl();
-  const shufersalUrl = await discoverShufersalUrl();
   const ramiLevyUrl = await discoverRamiLevyUrl();
 
   const chains = [
     { id: 'אושר עד', url: osherAdUrl },
-    { id: 'שופרסל', url: shufersalUrl },
     { id: 'רמי לוי', url: ramiLevyUrl },
   ];
 
