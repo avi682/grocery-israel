@@ -27,7 +27,8 @@ import {
   collection, 
   getDocs,
   query,
-  where
+  where,
+  limit
 } from 'firebase/firestore';
 import { db } from './firebaseConfig';
 import { performFuzzySearch, calculatePriceComparison } from './fuzzySearch';
@@ -44,11 +45,12 @@ export default function App() {
   const [showSearchModal, setShowSearchModal] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState([]);
-  const [allProducts, setAllProducts] = useState([]); // Master list of products for fuzzy search
   const [allPrices, setAllPrices] = useState([]); // Global prices for comparison
   const [comparison, setComparison] = useState([]);
   const [itemMatches, setItemMatches] = useState({});
   const [shareFeedback, setShareFeedback] = useState(false);
+  const [searchLoading, setSearchLoading] = useState(false);
+  const searchTimeout = React.useRef(null);
 
   // 1. Check for list code in URL or storage on mount
   useEffect(() => {
@@ -80,43 +82,33 @@ export default function App() {
   useEffect(() => {
     if (!listCode) return;
 
-    // Load master products and prices for fuzzy search/comparison
-    const fetchMasterData = async () => {
+    // 2a. Fetch only relevant prices for the items ALREADY in the list
+    const fetchListPrices = async () => {
+      if (groceryItems.length === 0) return;
       try {
-        const productsSnap = await getDocs(collection(db, 'master_catalog'));
-        const masterData = productsSnap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        const barcodes = groceryItems.map(i => i.barcode).filter(Boolean);
+        const names = groceryItems.filter(i => !i.barcode).map(i => i.name);
         
-        // 1. Prepare search products (each doc is a unique product)
-        const productsForSearch = masterData.map(p => {
-          const prices = Object.values(p.prices || {});
-          return {
-            ...p,
-            minPrice: prices.length > 0 ? Math.min(...prices) : 0
-          };
-        });
-        setAllProducts(productsForSearch);
-
-        // 2. Prepare flattened prices for the comparison engine (1 entry per chain per product)
-        const flattenedPrices = [];
-        masterData.forEach(p => {
-          if (p.prices) {
-            Object.entries(p.prices).forEach(([chainId, price]) => {
-              flattenedPrices.push({
-                name: p.name,
-                barcode: p.id,
-                chain_id: chainId,
-                price: price
-              });
+        let fetchedPrices = [];
+        
+        // Fetch by barcode
+        if (barcodes.length > 0) {
+          const q = query(collection(db, 'master_catalog'), where('__name__', 'in', barcodes));
+          const snap = await getDocs(q);
+          snap.forEach(doc => {
+            const data = doc.data();
+            Object.entries(data.prices || {}).forEach(([chainId, price]) => {
+              fetchedPrices.push({ name: data.name, barcode: doc.id, chain_id: chainId, price });
             });
-          }
-        });
-        setAllPrices(flattenedPrices);
-
+          });
+        }
+        
+        setAllPrices(fetchedPrices);
       } catch (err) {
-        console.error("Error fetching master data:", err);
+        console.error("Error fetching list prices:", err);
       }
     };
-    fetchMasterData();
+    fetchListPrices();
 
     // Listen to the specific list
     const unsubscribe = onSnapshot(doc(db, 'shared_lists', listCode), (snapshot) => {
@@ -124,13 +116,12 @@ export default function App() {
         const data = snapshot.data();
         setGroceryItems(data.items || []);
       } else {
-        // Create the document if it doesn't exist
         setDoc(doc(db, 'shared_lists', listCode), { items: [], created_at: new Date() });
       }
     });
 
     return () => unsubscribe();
-  }, [listCode]);
+  }, [listCode, groceryItems.length]);
 
   // 3. Update Price Comparison and Item Matches
   useEffect(() => {
@@ -292,11 +283,42 @@ export default function App() {
 
   const handleSearch = (text) => {
     setSearchQuery(text);
+    if (searchTimeout.current) clearTimeout(searchTimeout.current);
+
     if (text.length > 1) {
-      const filtered = performFuzzySearch(allProducts, text);
-      setSearchResults(filtered);
+      setSearchLoading(true);
+      searchTimeout.current = setTimeout(async () => {
+        try {
+          // Firestore prefix search (e.g., "חלב" -> codes starting with "חלב")
+          // Note: This requires a custom approach since Firestore doesn't provide native fuzzy search.
+          // For true scale, we'd use Algolia. For now, we fetch top 30 matches starting with the prefix.
+          const q = query(
+            collection(db, 'master_catalog'),
+            where('name', '>=', text),
+            where('name', '<=', text + '\uf8ff'),
+            limit(30)
+          );
+          const snap = await getDocs(q);
+          const results = snap.docs.map(doc => {
+            const data = doc.data();
+            const prices = Object.values(data.prices || {});
+            return {
+              id: doc.id,
+              barcode: doc.id,
+              ...data,
+              minPrice: prices.length > 0 ? Math.min(...prices) : 0
+            };
+          });
+          setSearchResults(results);
+        } catch (e) {
+          console.error("Search error:", e);
+        } finally {
+          setSearchLoading(false);
+        }
+      }, 400); // 400ms debounce
     } else {
       setSearchResults([]);
+      setSearchLoading(false);
     }
   };
 
@@ -472,23 +494,28 @@ export default function App() {
             </TouchableOpacity>
           )}
 
-          <Text style={styles.suggestionTitle}>{searchQuery.length > 1 ? 'הצעות ממאגר המחירים:' : 'מוצרים פופולריים:'}</Text>
+          <Text style={styles.suggestionTitle}>{searchQuery.length > 1 ? 'הצעות ממאגר המחירים:' : 'הקלד לחיפוש מוצרים...'}</Text>
           
-          <FlatList
-            data={searchQuery.length > 1 ? searchResults : allProducts.slice(0, 10)}
-            keyExtractor={(item, index) => index.toString()}
-            renderItem={({ item }) => (
-              <TouchableOpacity style={styles.searchResultItem} onPress={() => addItemToFirestore(item)}>
-                <View style={{ alignItems: 'flex-end' }}>
-                   <Text style={styles.resultName}>{item.name}</Text>
-                   <Text style={styles.resultDetail}>{item.brand} • {item.category}</Text>
-                   <Text style={styles.searchPrice}>החל מ-₪{item.minPrice.toFixed(2)}</Text>
-                </View>
-                <Text style={styles.addIcon}>+</Text>
-              </TouchableOpacity>
-            )}
-            ListHeaderComponent={null}
-          />
+          {searchLoading ? (
+            <ActivityIndicator size="small" color="#6200ee" style={{ marginTop: 20 }} />
+          ) : (
+            <FlatList
+              data={searchResults}
+              keyExtractor={(item) => item.barcode}
+              renderItem={({ item }) => (
+                <TouchableOpacity style={styles.searchResultItem} onPress={() => addItemToFirestore(item)}>
+                  <View style={{ alignItems: 'flex-end' }}>
+                     <Text style={styles.resultName}>{item.name}</Text>
+                     <Text style={styles.resultDetail}>{item.brand} • {item.barcode}</Text>
+                     <Text style={styles.searchPrice}>החל מ-₪{item.minPrice.toFixed(2)}</Text>
+                  </View>
+                  <Text style={styles.addIcon}>+</Text>
+                </TouchableOpacity>
+              )}
+              ListHeaderComponent={null}
+              ListEmptyComponent={searchQuery.length > 1 ? <Text style={styles.noResults}>לא נמצאו מוצרים</Text> : null}
+            />
+          )}
         </SafeAreaView>
       </Modal>
     </SafeAreaView>
@@ -856,6 +883,12 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.2,
     shadowRadius: 8,
     elevation: 4,
+  },
+  noResults: {
+    textAlign: 'center',
+    marginTop: 40,
+    color: '#adb5bd',
+    fontSize: 16,
   },
   mainAddButtonText: {
     color: '#fff',
