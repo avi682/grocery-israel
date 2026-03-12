@@ -301,8 +301,7 @@ export default function App() {
           const snap = await getDocs(q);
           const results = snap.docs.map(doc => {
             const data = doc.data();
-            const prices = Object.values(itemMatches[item.barcode]?.prices || {}).filter(p => p > 0);
-    const avg = prices.length > 0 ? (prices.reduce((a, b) => a + b, 0) / prices.length).toFixed(2) : null;
+            const prices = Object.values(data.prices || {}).filter(p => p > 0);
             return {
               id: doc.id,
               barcode: doc.id,
