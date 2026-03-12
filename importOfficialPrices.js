@@ -25,80 +25,96 @@ const cleanStr = (str) => str ? str.replace(/&amp;/g, '&').replace(/&quot;/g, '"
 
 
 /**
- * Discovers Osher Ad URL.
- * Requires login to get a session cookie.
+ * Discovers Osher Ad URL with full CSRF and Session handling.
  */
 async function discoverOsherAdUrl() {
-  console.log("Discovering latest Osher Ad URL...");
+  console.log("Discovering latest Osher Ad URL (Robust Method)...");
+  const hostname = 'url.publishedprices.co.il';
+  const commonHeaders = { 'User-Agent': 'Mozilla/5.0' };
+
   return new Promise((resolve) => {
-    // 1. Login to get session cookie
-    const loginData = 'user=Osherad';
-    const loginOptions = {
-      hostname: 'url.publishedprices.co.il',
-      path: '/login',
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/x-www-form-urlencoded',
-        'Content-Length': loginData.length
-      },
-      rejectUnauthorized: false
-    };
+    // 1. GET /login to find CSRF token and initial cookie
+    https.get({ hostname, path: '/login', headers: commonHeaders, rejectUnauthorized: false }, (res) => {
+      let html = '';
+      const setCookies = res.headers['set-cookie'] || [];
+      let cookie = setCookies.find(c => c.startsWith('cftpSID='))?.split(';')[0];
+      
+      res.on('data', chunk => html += chunk);
+      res.on('end', () => {
+        const csrfMatch = html.match(/name="csrftoken" value="([^"]+)"/);
+        const csrfToken = csrfMatch ? csrfMatch[1] : null;
 
-    const loginReq = https.request(loginOptions, (res) => {
-      const cookies = res.headers['set-cookie'];
-      const sessionCookie = cookies ? cookies.find(c => c.startsWith('cftpSID='))?.split(';')[0] : null;
+        if (!csrfToken) {
+          console.error("Could not find CSRF token for Osher Ad.");
+          return resolve(null);
+        }
 
-      if (!sessionCookie) {
-        console.warn("Could not get session cookie for Osher Ad.");
-        return resolve(null);
-      }
+        // 2. POST /login with the token
+        const loginData = `user=Osherad&password=&csrftoken=${csrfToken}`;
+        const loginOptions = {
+          hostname, path: '/login', method: 'POST',
+          headers: { 
+            ...commonHeaders,
+            'Content-Type': 'application/x-www-form-urlencoded',
+            'Content-Length': loginData.length,
+            'Cookie': cookie || ''
+          },
+          rejectUnauthorized: false
+        };
 
-      // 2. Fetch file list using the cookie
-      const listData = 'path=.&sub=false';
-      const listOptions = {
-        hostname: 'url.publishedprices.co.il',
-        path: '/file/json/dir',
-        method: 'POST',
-        headers: {
-          'Cookie': sessionCookie,
-          'Content-Type': 'application/x-www-form-urlencoded',
-          'Content-Length': listData.length
-        },
-        rejectUnauthorized: false
-      };
+        const loginReq = https.request(loginOptions, (loginRes) => {
+          const loginCookies = loginRes.headers['set-cookie'] || [];
+          const sessionCookie = loginCookies.find(c => c.startsWith('cftpSID='))?.split(';')[0] || cookie;
 
-      const listReq = https.request(listOptions, (listRes) => {
-        let body = '';
-        listRes.on('data', (chunk) => body += chunk);
-        listRes.on('end', () => {
-          try {
-            const files = JSON.parse(body);
-            // Search for PriceFull for Store 1 (Chain ID 7290103152017)
-            const priceFile = files.find(f => f.name.includes('PriceFull7290103152017-001') && f.name.endsWith('.gz'));
-            if (priceFile) {
-              const url = `https://url.publishedprices.co.il/file/d/${priceFile.name}`;
-              console.log("Found Osher Ad URL:", url);
-              resolve(url);
-            } else {
-              console.warn("Could not find Osher Ad PriceFull file in listing.");
-              resolve(null);
-            }
-          } catch (e) {
-            console.error("Error parsing Osher Ad file list:", e.message);
-            resolve(null);
-          }
+          // 3. POST /file/json/dir to get file list (DataTables format)
+          const listParams = new URLSearchParams({
+            sEcho: '1', iDisplayLength: '1000', cd: '/', 
+            csrftoken: csrfToken
+          }).toString();
+
+          const listOptions = {
+            hostname, path: '/file/json/dir', method: 'POST',
+            headers: {
+              ...commonHeaders,
+              'Content-Type': 'application/x-www-form-urlencoded',
+              'Content-Length': listParams.length,
+              'Cookie': sessionCookie,
+              'x-requested-with': 'XMLHttpRequest'
+            },
+            rejectUnauthorized: false
+          };
+
+          const listReq = https.request(listOptions, (listRes) => {
+            let body = '';
+            listRes.on('data', chunk => body += chunk);
+            listRes.on('end', () => {
+              try {
+                const data = JSON.parse(body);
+                const files = data.aaData || [];
+                // Find PriceFull7290103152017-001... (Osher Ad Store 1)
+                const priceFile = files.find(f => f.fname.includes('PriceFull7290103152017-001') && f.fname.endsWith('.gz'));
+                
+                if (priceFile) {
+                  const url = `https://${hostname}/file/d/${priceFile.fname}`;
+                  console.log("Found Osher Ad URL:", url);
+                  resolve(url);
+                } else {
+                  console.warn("Could not find Osher Ad PriceFull file in JSON.");
+                  resolve(null);
+                }
+              } catch (e) {
+                console.error("Error parsing Osher Ad file list JSON:", e.message);
+                resolve(null);
+              }
+            });
+          });
+          listReq.write(listParams);
+          listReq.end();
         });
+        loginReq.write(loginData);
+        loginReq.end();
       });
-      listReq.write(listData);
-      listReq.end();
     });
-
-    loginReq.on('error', (e) => {
-      console.error("Osher Ad login error:", e.message);
-      resolve(null);
-    });
-    loginReq.write(loginData);
-    loginReq.end();
   });
 }
 
