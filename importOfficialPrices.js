@@ -140,40 +140,6 @@ async function discoverOsherAdUrl() {
   });
 }
 
-          const listReq = https.request(listOptions, (listRes) => {
-            let body = '';
-            listRes.on('data', chunk => body += chunk);
-            listRes.on('end', () => {
-              try {
-                const data = JSON.parse(body);
-                const files = data.aaData || [];
-                // Find PriceFull7290103152017-001... (Osher Ad Store 1)
-                const priceFile = files.find(f => f.fname.includes('PriceFull7290103152017-001') && f.fname.endsWith('.gz'));
-                
-                if (priceFile) {
-                  const url = `https://${hostname}/file/d/${priceFile.fname}`;
-                  console.log("Found Osher Ad URL:", url);
-                  resolve(url);
-                } else {
-                  console.warn("Could not find Osher Ad PriceFull file in JSON.");
-                  resolve(null);
-                }
-              } catch (e) {
-                console.error("Error parsing Osher Ad file list JSON:", e.message);
-                resolve(null);
-              }
-            });
-          });
-          listReq.write(listParams);
-          listReq.end();
-        });
-        loginReq.write(loginData);
-        loginReq.end();
-      });
-    });
-  });
-}
-
 /**
  * Discovers Rami Levy URL.
  */
