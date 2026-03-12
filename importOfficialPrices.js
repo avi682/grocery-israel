@@ -25,79 +25,120 @@ const cleanStr = (str) => str ? str.replace(/&amp;/g, '&').replace(/&quot;/g, '"
 
 
 /**
- * Discovers Osher Ad URL with full CSRF and Session handling.
+ * Discovers Osher Ad URL with advanced session and cookie management.
  */
 async function discoverOsherAdUrl() {
-  console.log("Discovering latest Osher Ad URL (Robust Method)...");
+  console.log("Discovering latest Osher Ad URL (Advanced Session Mode)...");
   const hostname = 'url.publishedprices.co.il';
   const commonHeaders = { 
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
     'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
     'Accept-Language': 'en-US,en;q=0.9',
+    'Connection': 'keep-alive'
   };
 
+  let cookies = {};
+
+  const updateCookies = (setCookieHeaders) => {
+    if (!setCookieHeaders) return;
+    setCookieHeaders.forEach(c => {
+      const parts = c.split(';')[0].split('=');
+      if (parts.length === 2) cookies[parts[0].trim()] = parts[1].trim();
+    });
+  };
+
+  const getCookieStr = () => Object.entries(cookies).map(([k, v]) => `${k}=${v}`).join('; ');
+
   return new Promise((resolve) => {
-    // 1. GET /login to find CSRF token and initial cookie
+    // 1. GET /login (Initial Token)
     https.get({ hostname, path: '/login', headers: commonHeaders, rejectUnauthorized: false }, (res) => {
-      console.log(`GET /login Status: ${res.statusCode}`);
+      updateCookies(res.headers['set-cookie']);
       let html = '';
-      const setCookies = res.headers['set-cookie'] || [];
-      let cookie = setCookies.find(c => c.startsWith('cftpSID='))?.split(';')[0];
-      
       res.on('data', chunk => html += chunk);
       res.on('end', () => {
-        // Use non-greedy match [^>]+? to prevent devouring the attribute name
         const csrfMatch = html.match(/csrftoken["'][^>]+?(?:content|value)=["']([^"']+)["']/i) ||
                           html.match(/(?:content|value)=["']([^"']+)["'][^>]+?csrftoken/i);
-        const csrfToken = csrfMatch ? csrfMatch[1] : null;
+        let csrfToken = csrfMatch ? csrfMatch[1] : null;
+        if (!csrfToken) return resolve(null);
+        console.log("Initial CSRF Token found.");
 
-        if (!csrfToken) {
-          console.error("Could not find CSRF token for Osher Ad.");
-          // Log even more context to see why the regex missed it
-          const head = html.match(/<head>([\s\S]*?)<\/head>/i)?.[0] || html.substring(0, 2000);
-          console.log("Full Head Content:", head);
-          return resolve(null);
-        }
-        console.log("Found Osher Ad CSRF Token.");
-
-        // 2. POST /login with the token
+        // 2. POST /login
         const loginData = `user=Osherad&password=&csrftoken=${csrfToken}`;
-        const loginOptions = {
+        const loginReq = https.request({
           hostname, path: '/login', method: 'POST',
           headers: { 
             ...commonHeaders,
             'Content-Type': 'application/x-www-form-urlencoded',
             'Content-Length': loginData.length,
-            'Cookie': cookie || '',
-            'Origin': `https://${hostname}`,
-            'Referer': `https://${hostname}/login`
+            'Cookie': getCookieStr()
           },
           rejectUnauthorized: false
-        };
-
-        const loginReq = https.request(loginOptions, (loginRes) => {
+        }, (loginRes) => {
+          updateCookies(loginRes.headers['set-cookie']);
           console.log(`POST /login Status: ${loginRes.statusCode}`);
-          const loginCookies = loginRes.headers['set-cookie'] || [];
-          const sessionCookie = loginCookies.find(c => c.startsWith('cftpSID='))?.split(';')[0] || cookie;
 
-          // 3. POST /file/json/dir to get file list (DataTables format)
-          const listParams = new URLSearchParams({
-            sEcho: '1', iDisplayLength: '1000', cd: '/', 
-            csrftoken: csrfToken
-          }).toString();
-
-          const listOptions = {
-            hostname, path: '/file/json/dir', method: 'POST',
-            headers: {
-              ...commonHeaders,
-              'Content-Type': 'application/x-www-form-urlencoded',
-              'Content-Length': listParams.length,
-              'Cookie': sessionCookie,
-              'x-requested-with': 'XMLHttpRequest',
-              'Referer': `https://${hostname}/file`
-            },
+          // 3. GET /file (Establish full dashboard session)
+          https.get({
+            hostname, path: '/file',
+            headers: { ...commonHeaders, 'Cookie': getCookieStr() },
             rejectUnauthorized: false
-          };
+          }, (fileRes) => {
+            updateCookies(fileRes.headers['set-cookie']);
+            let fileHtml = '';
+            fileRes.on('data', chunk => fileHtml += chunk);
+            fileRes.on('end', () => {
+              // Extract FRESH token from the dashboard
+              const freshCsrfMatch = fileHtml.match(/csrftoken["'][^>]+?(?:content|value)=["']([^"']+)["']/i);
+              const freshToken = freshCsrfMatch ? freshCsrfMatch[1] : csrfToken;
+              console.log("Dashboard session established.");
+
+              // 4. POST /file/json/dir (The actual API call)
+              const listParams = new URLSearchParams({
+                sEcho: '1', iDisplayLength: '1000', cd: '/', csrftoken: freshToken
+              }).toString();
+
+              const listReq = https.request({
+                hostname, path: '/file/json/dir', method: 'POST',
+                headers: {
+                  ...commonHeaders,
+                  'Content-Type': 'application/x-www-form-urlencoded',
+                  'Content-Length': listParams.length,
+                  'Cookie': getCookieStr(),
+                  'x-requested-with': 'XMLHttpRequest',
+                  'Referer': `https://${hostname}/file`
+                },
+                rejectUnauthorized: false
+              }, (listRes) => {
+                let body = '';
+                listRes.on('data', chunk => body += chunk);
+                listRes.on('end', () => {
+                  try {
+                    const data = JSON.parse(body);
+                    const files = data.aaData || [];
+                    const priceFile = files.find(f => f.fname.includes('PriceFull7290103152017-001') && f.fname.endsWith('.gz'));
+                    if (priceFile) {
+                      const url = `https://${hostname}/file/d/${priceFile.fname}`;
+                      console.log("Found Osher Ad URL:", url);
+                      resolve(url);
+                    } else { resolve(null); }
+                  } catch (e) {
+                    console.error("Error parsing Osher Ad file list JSON:", e.message);
+                    console.log("Body Hint:", body.substring(0, 100));
+                    resolve(null);
+                  }
+                });
+              });
+              listReq.write(listParams);
+              listReq.end();
+            });
+          });
+        });
+        loginReq.write(loginData);
+        loginReq.end();
+      });
+    });
+  });
+}
 
           const listReq = https.request(listOptions, (listRes) => {
             let body = '';
