@@ -32,7 +32,8 @@ async function discoverShufersalUrl() {
     const options = {
       hostname: 'prices.shufersal.co.il',
       path: '/FileObject/UpdateCategory?catID=2&storeId=1', // PriceFull for Store 1
-      headers: { 'x-requested-with': 'XMLHttpRequest' }
+      headers: { 'x-requested-with': 'XMLHttpRequest' },
+      rejectUnauthorized: false // Bypass certificate issues on public portal
     };
     
     https.get(options, (res) => {
@@ -42,8 +43,10 @@ async function discoverShufersalUrl() {
         const regex = /href="(https:\/\/pricesprodpublic\.blob\.core\.windows\.net\/pricefull\/PriceFull[^"]+\.gz[^"]+)"/;
         const match = data.match(regex);
         if (match) {
-          console.log("Found Shufersal URL:", match[1]);
-          resolve(match[1]);
+          // Fix &amp; to & in the URL
+          const url = match[1].replace(/&amp;/g, '&');
+          console.log("Found Shufersal URL:", url);
+          resolve(url);
         } else {
           console.warn("Could not find Shufersal URL in AJAX response.");
           resolve(null);
@@ -72,7 +75,8 @@ async function discoverOsherAdUrl() {
       headers: {
         'Content-Type': 'application/x-www-form-urlencoded',
         'Content-Length': loginData.length
-      }
+      },
+      rejectUnauthorized: false
     };
 
     const loginReq = https.request(loginOptions, (res) => {
@@ -94,7 +98,8 @@ async function discoverOsherAdUrl() {
           'Cookie': sessionCookie,
           'Content-Type': 'application/x-www-form-urlencoded',
           'Content-Length': listData.length
-        }
+        },
+        rejectUnauthorized: false
       };
 
       const listReq = https.request(listOptions, (listRes) => {
@@ -145,7 +150,8 @@ async function processChainData(chainId, url) {
   console.log(`Downloading and processing ${chainId}...`);
   
   return new Promise((resolve) => {
-    const request = https.get(url, (res) => {
+    const options = new URL(url);
+    const request = https.get({...options, rejectUnauthorized: false}, (res) => {
       if (res.statusCode !== 200) {
         console.warn(`HTTP error ${res.statusCode} for ${chainId}`);
         return resolve(0);
