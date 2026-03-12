@@ -46,9 +46,9 @@ async function discoverOsherAdUrl() {
       
       res.on('data', chunk => html += chunk);
       res.on('end', () => {
-        // Extremely permissive regex: looks for csrftoken followed by content/value attribute anywhere in the same tag area.
-        const csrfMatch = html.match(/csrftoken["'][^>]+(?:content|value)=["']([^"']+)["']/i) ||
-                          html.match(/(?:content|value)=["']([^"']+)["'][^>]+csrftoken/i);
+        // Use non-greedy match [^>]+? to prevent devouring the attribute name
+        const csrfMatch = html.match(/csrftoken["'][^>]+?(?:content|value)=["']([^"']+)["']/i) ||
+                          html.match(/(?:content|value)=["']([^"']+)["'][^>]+?csrftoken/i);
         const csrfToken = csrfMatch ? csrfMatch[1] : null;
 
         if (!csrfToken) {
