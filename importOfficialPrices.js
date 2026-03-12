@@ -82,7 +82,7 @@ async function processChainData(chainId, url) {
           const barcode = itemXml.match(/<ItemCode>(.*?)<\/ItemCode>/)?.[1];
           const brand = cleanStr(itemXml.match(/<ManufacturerName>(.*?)<\/ManufacturerName>/)?.[1]);
           
-          if (name && price && barcode) {
+          if (name && price > 0 && barcode) {
             updates.push({ barcode, name, price, brand, chainId });
             count++;
           }

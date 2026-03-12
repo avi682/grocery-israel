@@ -301,14 +301,14 @@ export default function App() {
           const snap = await getDocs(q);
           const results = snap.docs.map(doc => {
             const data = doc.data();
-            const prices = Object.values(data.prices || {});
+            const prices = Object.values(data.prices || {}).filter(p => p > 0);
             return {
               id: doc.id,
               barcode: doc.id,
               ...data,
               minPrice: prices.length > 0 ? Math.min(...prices) : 0
             };
-          });
+          }).filter(r => r.minPrice > 0);
           setSearchResults(results);
         } catch (e) {
           console.error("Search error:", e);
