@@ -57,14 +57,88 @@ async function discoverShufersalUrl() {
 }
 
 /**
+ * Discovers Osher Ad URL.
+ * Requires login to get a session cookie.
+ */
+async function discoverOsherAdUrl() {
+  console.log("Discovering latest Osher Ad URL...");
+  return new Promise((resolve) => {
+    // 1. Login to get session cookie
+    const loginData = 'user=Osherad';
+    const loginOptions = {
+      hostname: 'url.publishedprices.co.il',
+      path: '/login',
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'Content-Length': loginData.length
+      }
+    };
+
+    const loginReq = https.request(loginOptions, (res) => {
+      const cookies = res.headers['set-cookie'];
+      const sessionCookie = cookies ? cookies.find(c => c.startsWith('cftpSID='))?.split(';')[0] : null;
+
+      if (!sessionCookie) {
+        console.warn("Could not get session cookie for Osher Ad.");
+        return resolve(null);
+      }
+
+      // 2. Fetch file list using the cookie
+      const listData = 'path=.&sub=false';
+      const listOptions = {
+        hostname: 'url.publishedprices.co.il',
+        path: '/file/json/dir',
+        method: 'POST',
+        headers: {
+          'Cookie': sessionCookie,
+          'Content-Type': 'application/x-www-form-urlencoded',
+          'Content-Length': listData.length
+        }
+      };
+
+      const listReq = https.request(listOptions, (listRes) => {
+        let body = '';
+        listRes.on('data', (chunk) => body += chunk);
+        body = ''; // Reset for actual collection
+        listRes.on('data', (chunk) => body += chunk);
+        listRes.on('end', () => {
+          try {
+            const files = JSON.parse(body);
+            // Search for PriceFull for Store 1 (Chain ID 7290103152017)
+            const priceFile = files.find(f => f.name.includes('PriceFull7290103152017-001') && f.name.endsWith('.gz'));
+            if (priceFile) {
+              const url = `https://url.publishedprices.co.il/file/d/${priceFile.name}`;
+              console.log("Found Osher Ad URL:", url);
+              resolve(url);
+            } else {
+              console.warn("Could not find Osher Ad PriceFull file in listing.");
+              resolve(null);
+            }
+          } catch (e) {
+            console.error("Error parsing Osher Ad file list:", e.message);
+            resolve(null);
+          }
+        });
+      });
+      listReq.write(listData);
+      listReq.end();
+    });
+
+    loginReq.on('error', (e) => {
+      console.error("Osher Ad login error:", e.message);
+      resolve(null);
+    });
+    loginReq.write(loginData);
+    loginReq.end();
+  });
+}
+
+/**
  * Discovers Rami Levy URL.
- * Note: Rami Levy portals often require a session cookie. 
- * We try to fetch the public file list index if available.
  */
 async function discoverRamiLevyUrl() {
   console.log("Attempting Rami Levy discovery...");
-  // Rami Levy usually lists files at a predictable path if authenticated.
-  // For now, we return a known pattern or null if we can't automate the session easily.
   return null; 
 }
 
@@ -136,10 +210,12 @@ async function processChainData(chainId, url) {
 }
 
 async function main() {
+  const osherAdUrl = await discoverOsherAdUrl();
   const shufersalUrl = await discoverShufersalUrl();
   const ramiLevyUrl = await discoverRamiLevyUrl();
 
   const chains = [
+    { id: 'אושר עד', url: osherAdUrl },
     { id: 'שופרסל', url: shufersalUrl },
     { id: 'רמי לוי', url: ramiLevyUrl },
   ];
