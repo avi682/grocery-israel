@@ -72,10 +72,8 @@ async function processChainData(chainId, url) {
       gunzip.on('end', async () => {
         const itemRegex = /<Item>([\s\S]*?)<\/Item>/g;
         let match;
-        const updates = [];
-        let count = 0;
-        
-        while ((match = itemRegex.exec(xmlData)) !== null && count < ITEM_LIMIT_PER_RUN) {
+        const allValidItems = [];
+        while ((match = itemRegex.exec(xmlData)) !== null) {
           const itemXml = match[1];
           const name = cleanStr(itemXml.match(/<ItemName>(.*?)<\/ItemName>/)?.[1]);
           const price = parseFloat(itemXml.match(/<ItemPrice>(.*?)<\/ItemPrice>/)?.[1]);
@@ -83,10 +81,17 @@ async function processChainData(chainId, url) {
           const brand = cleanStr(itemXml.match(/<ManufacturerName>(.*?)<\/ManufacturerName>/)?.[1]);
           
           if (name && price > 0 && barcode && brand && brand !== '---') {
-            updates.push({ barcode, name, price, brand, chainId });
-            count++;
+            allValidItems.push({ barcode, name, price, brand, chainId });
           }
         }
+
+        // Shuffle the results to get a random mix each day
+        for (let i = allValidItems.length - 1; i > 0; i--) {
+          const j = Math.floor(Math.random() * (i + 1));
+          [allValidItems[i], allValidItems[j]] = [allValidItems[j], allValidItems[i]];
+        }
+
+        const updates = allValidItems.slice(0, ITEM_LIMIT_PER_RUN);
 
         if (updates.length > 0) {
           const batch = writeBatch(db);
@@ -103,7 +108,7 @@ async function processChainData(chainId, url) {
           }
           await batch.commit();
         }
-        resolve(count);
+        resolve(updates.length);
       });
     });
 
