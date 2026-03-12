@@ -82,7 +82,7 @@ async function processChainData(chainId, url) {
           const barcode = itemXml.match(/<ItemCode>(.*?)<\/ItemCode>/)?.[1];
           const brand = cleanStr(itemXml.match(/<ManufacturerName>(.*?)<\/ManufacturerName>/)?.[1]);
           
-          if (name && price > 0 && barcode) {
+          if (name && price > 0 && barcode && brand && brand !== '---') {
             updates.push({ barcode, name, price, brand, chainId });
             count++;
           }
@@ -96,7 +96,9 @@ async function processChainData(chainId, url) {
               name: item.name,
               brand: item.brand,
               updated_at: new Date(),
-              [`prices.${item.chainId}`]: item.price
+              prices: {
+                [item.chainId]: item.price
+              }
             }, { merge: true });
           }
           await batch.commit();
