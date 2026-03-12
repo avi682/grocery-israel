@@ -100,8 +100,6 @@ async function discoverOsherAdUrl() {
       const listReq = https.request(listOptions, (listRes) => {
         let body = '';
         listRes.on('data', (chunk) => body += chunk);
-        body = ''; // Reset for actual collection
-        listRes.on('data', (chunk) => body += chunk);
         listRes.on('end', () => {
           try {
             const files = JSON.parse(body);
