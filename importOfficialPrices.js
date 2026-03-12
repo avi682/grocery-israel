@@ -30,11 +30,16 @@ const cleanStr = (str) => str ? str.replace(/&amp;/g, '&').replace(/&quot;/g, '"
 async function discoverOsherAdUrl() {
   console.log("Discovering latest Osher Ad URL (Robust Method)...");
   const hostname = 'url.publishedprices.co.il';
-  const commonHeaders = { 'User-Agent': 'Mozilla/5.0' };
+  const commonHeaders = { 
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+    'Accept-Language': 'en-US,en;q=0.9',
+  };
 
   return new Promise((resolve) => {
     // 1. GET /login to find CSRF token and initial cookie
     https.get({ hostname, path: '/login', headers: commonHeaders, rejectUnauthorized: false }, (res) => {
+      console.log(`GET /login Status: ${res.statusCode}`);
       let html = '';
       const setCookies = res.headers['set-cookie'] || [];
       let cookie = setCookies.find(c => c.startsWith('cftpSID='))?.split(';')[0];
@@ -46,8 +51,10 @@ async function discoverOsherAdUrl() {
 
         if (!csrfToken) {
           console.error("Could not find CSRF token for Osher Ad.");
+          console.log("Response Content Snippet:", html.substring(0, 500));
           return resolve(null);
         }
+        console.log("Found Osher Ad CSRF Token.");
 
         // 2. POST /login with the token
         const loginData = `user=Osherad&password=&csrftoken=${csrfToken}`;
@@ -57,12 +64,15 @@ async function discoverOsherAdUrl() {
             ...commonHeaders,
             'Content-Type': 'application/x-www-form-urlencoded',
             'Content-Length': loginData.length,
-            'Cookie': cookie || ''
+            'Cookie': cookie || '',
+            'Origin': `https://${hostname}`,
+            'Referer': `https://${hostname}/login`
           },
           rejectUnauthorized: false
         };
 
         const loginReq = https.request(loginOptions, (loginRes) => {
+          console.log(`POST /login Status: ${loginRes.statusCode}`);
           const loginCookies = loginRes.headers['set-cookie'] || [];
           const sessionCookie = loginCookies.find(c => c.startsWith('cftpSID='))?.split(';')[0] || cookie;
 
@@ -79,7 +89,8 @@ async function discoverOsherAdUrl() {
               'Content-Type': 'application/x-www-form-urlencoded',
               'Content-Length': listParams.length,
               'Cookie': sessionCookie,
-              'x-requested-with': 'XMLHttpRequest'
+              'x-requested-with': 'XMLHttpRequest',
+              'Referer': `https://${hostname}/file`
             },
             rejectUnauthorized: false
           };
