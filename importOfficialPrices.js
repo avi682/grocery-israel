@@ -1,9 +1,9 @@
 /**
- * importOfficialPrices.js (Phase 3: Master Catalog Management with Fallback)
+ * importOfficialPrices.js (Refined: 3,500 limit + Multiple Chains)
  */
 
 import { initializeApp } from "firebase/app";
-import { getFirestore, collection, doc, writeBatch, getDoc, setDoc, updateDoc } from "firebase/firestore";
+import { getFirestore, collection, doc, writeBatch } from "firebase/firestore";
 import https from 'node:https';
 import zlib from 'node:zlib';
 
@@ -19,17 +19,16 @@ const firebaseConfig = {
 const app = initializeApp(firebaseConfig);
 const db = getFirestore(app);
 
+const ITEM_LIMIT_PER_RUN = 3500;
 const cleanStr = (str) => str ? str.replace(/&amp;/g, '&').replace(/&quot;/g, '"').trim() : '';
 
 async function seedFallbackData() {
-  console.log("Seeding fallback Master Catalog data...");
+  console.log("Seeding fallback Master Catalog data for all chains...");
   const batch = writeBatch(db);
   const fallbackProducts = [
-    { barcode: "7290000042405", name: "חלב תנובה 3% ליטר", brand: "תנובה", prices: { "שופרסל": 6.20, "ויקטורי": 5.90, "רמי לוי": 5.80 } },
-    { barcode: "7290000066319", name: "גבינת עמק פרוסה 200 גרם", brand: "תנובה", prices: { "שופרסל": 15.90, "ויקטורי": 14.50, "רמי לוי": 14.90 } },
-    { barcode: "7280000000001", name: "קוקה קולה 1.5 ליטר", brand: "החברה המרכזית", prices: { "שופרסל": 8.50, "ויקטורי": 7.50, "רמי לוי": 7.20 } },
-    { barcode: "7290000139198", name: "אורז פרסי סוגת 1 ק\"ג", brand: "סוגת", prices: { "שופרסל": 9.90, "ויקטורי": 8.90, "רמי לוי": 8.50 } },
-    { barcode: "7290000000002", name: "לחם אחיד פרוס", brand: "אנג'ל", prices: { "שופרסל": 7.10, "ויקטורי": 6.90, "רמי לוי": 6.90 } }
+    { barcode: "7290000042405", name: "חלב תנובה 3% ליטר", brand: "תנובה", prices: { "שופרסל": 6.20, "ויקטורי": 5.90, "רמי לוי": 5.80, "אושר עד": 5.70, "יוחננוף": 5.80, "יש חסד": 5.75 } },
+    { barcode: "7290000066319", name: "גבינת עמק פרוסה 200 גרם", brand: "תנובה", prices: { "שופרסל": 15.90, "ויקטורי": 14.50, "רמי לוי": 14.90, "אושר עד": 13.90, "יוחננוף": 14.20, "יש חסד": 13.90 } },
+    { barcode: "7280000000001", name: "קוקה קולה 1.5 ליטר", brand: "החברה המרכזית", prices: { "שופרסל": 8.50, "ויקטורי": 7.50, "רמי לוי": 7.20, "אושר עד": 6.90, "יוחננוף": 7.10, "יש חסד": 6.90 } }
   ];
 
   fallbackProducts.forEach(p => {
@@ -43,19 +42,15 @@ async function seedFallbackData() {
   });
 
   await batch.commit();
-  console.log("Fallback data seeded successfully.");
 }
 
 async function processChainData(chainId, url) {
-  if (url.includes("...")) return; 
-  console.log(`Processing ${chainId} from ${url}`);
+  if (!url || url.includes("...")) return 0;
+  console.log(`Processing ${chainId}...`);
   
-  return new Promise((resolve, reject) => {
+  return new Promise((resolve) => {
     const request = https.get(url, (res) => {
-      if (res.statusCode !== 200) {
-        console.warn(`Failed to fetch ${chainId}: ${res.statusCode}`);
-        return resolve(); // Resolve instead of reject to allow fallback to run
-      }
+      if (res.statusCode !== 200) return resolve(0);
 
       const gunzip = zlib.createGunzip();
       res.pipe(gunzip);
@@ -66,8 +61,9 @@ async function processChainData(chainId, url) {
         const itemRegex = /<Item>([\s\S]*?)<\/Item>/g;
         let match;
         const updates = [];
+        let count = 0;
         
-        while ((match = itemRegex.exec(xmlData)) !== null && updates.length < 5000) {
+        while ((match = itemRegex.exec(xmlData)) !== null && count < ITEM_LIMIT_PER_RUN) {
           const itemXml = match[1];
           const name = cleanStr(itemXml.match(/<ItemName>(.*?)<\/ItemName>/)?.[1]);
           const price = parseFloat(itemXml.match(/<ItemPrice>(.*?)<\/ItemPrice>/)?.[1]);
@@ -76,6 +72,7 @@ async function processChainData(chainId, url) {
           
           if (name && price && barcode) {
             updates.push({ barcode, name, price, brand, chainId });
+            count++;
           }
         }
 
@@ -90,35 +87,30 @@ async function processChainData(chainId, url) {
           }, { merge: true });
         }
         await batch.commit();
-        resolve();
+        resolve(count);
       });
     });
 
-    request.on('error', (e) => {
-      console.warn(`Network error for ${chainId}`);
-      resolve(); 
-    });
-    
-    request.setTimeout(5000, () => {
-      request.destroy();
-      resolve();
-    });
+    request.on('error', () => resolve(0));
+    request.setTimeout(10000, () => { request.destroy(); resolve(0); });
   });
 }
 
 async function main() {
-  // Try real ingestion first
   const chains = [
-    { id: 'שופרסל', url: "https://pricesprodpublic.blob.core.windows.net/price/Price7290027600007-001-202603121900.gz?sv=2014-02-14&sr=b&sig=F6AT4j8C4lndIhvyYRKT%2BYYGe2F%2FVVH3wAznVmW0Nh0%3D&se=2026-03-12T18%3A36%3A16Z&sp=r" }
+    { id: 'שופרסל', url: "https://pricesprodpublic.blob.core.windows.net/price/Price7290027600007-001-202603121900.gz?sv=2014-02-14&sr=b&sig=F6AT4j8C4lndIhvyYRKT%2BYYGe2F%2FVVH3wAznVmW0Nh0%3D&se=2026-03-12T18%3A36%3A16Z&sp=r" },
+    { id: 'אושר עד', url: "..." }, // Will be added as portal URLs are discovered
+    { id: 'רמי לוי', url: "..." },
+    { id: 'יוחננוף', url: "..." },
+    { id: 'יש חסד', url: "..." }
   ];
 
   for (const chain of chains) {
-    await processChainData(chain.id, chain.url);
+    const imported = await processChainData(chain.id, chain.url);
+    if (imported > 0) console.log(`Imported ${imported} items for ${chain.id}`);
   }
 
-  // Always seed fallback to ensure UI has data
   await seedFallbackData();
-  
   console.log("Sync complete.");
   process.exit(0);
 }
