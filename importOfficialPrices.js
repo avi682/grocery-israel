@@ -46,15 +46,16 @@ async function discoverOsherAdUrl() {
       
       res.on('data', chunk => html += chunk);
       res.on('end', () => {
-        // More robust regex: handle optional spaces, different quote types, and attribute order.
-        const csrfMatch = html.match(/name="csrftoken"\s+content="([^"]+)"/i) || 
-                          html.match(/content="([^"]+)"\s+name="csrftoken"/i) ||
-                          html.match(/name="csrftoken"\s+value="([^"]+)"/i);
+        // Extremely permissive regex: looks for csrftoken followed by content/value attribute anywhere in the same tag area.
+        const csrfMatch = html.match(/csrftoken["'][^>]+(?:content|value)=["']([^"']+)["']/i) ||
+                          html.match(/(?:content|value)=["']([^"']+)["'][^>]+csrftoken/i);
         const csrfToken = csrfMatch ? csrfMatch[1] : null;
 
         if (!csrfToken) {
           console.error("Could not find CSRF token for Osher Ad.");
-          console.log("Full Head Snippet:", html.match(/<head>([\s\S]*?)<\/head>/i)?.[0]?.substring(0, 1000));
+          // Log even more context to see why the regex missed it
+          const head = html.match(/<head>([\s\S]*?)<\/head>/i)?.[0] || html.substring(0, 2000);
+          console.log("Full Head Content:", head);
           return resolve(null);
         }
         console.log("Found Osher Ad CSRF Token.");
