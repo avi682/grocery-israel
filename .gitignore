@@ -6,3 +6,9 @@ yarn-debug.log*
 yarn-error.log*
 .DS_Store
 *.local
+.env*
+*.log
+groceryisrael-firebase-adminsdk-fbsvc-*.json
+venv/
+venv313/
+.firebase/

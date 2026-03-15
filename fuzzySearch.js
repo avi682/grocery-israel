@@ -54,19 +54,27 @@ export const calculatePriceComparison = (cart, allPrices) => {
 
   // 3. Match each cart item
   const cartWithMatches = cart.map(item => {
+    const itemNameClean = item.name.toLowerCase().trim();
+    
     // Priority 1: Match by exact barcode
     if (item.barcode) {
       const barcodeMatch = uniqueProducts.find(up => up.barcode === item.barcode);
       if (barcodeMatch) return { ...item, matchedBarcode: item.barcode, matchedName: barcodeMatch.name };
     }
 
-    // Priority 2: Match by fuzzy name
+    // Priority 2: Match by exact name (case insensitive)
+    const exactNameMatch = uniqueProducts.find(up => up.name.toLowerCase().trim() === itemNameClean);
+    if (exactNameMatch) return { ...item, matchedBarcode: exactNameMatch.barcode, matchedName: exactNameMatch.name };
+
+    // Priority 3: Match by fuzzy name
     const searchResult = fuse.search(item.name);
     if (searchResult.length > 0) {
+      // Bonus: Check if brand matches to increase confidence
+      const topMatch = searchResult[0].item;
       return { 
         ...item, 
-        matchedBarcode: searchResult[0].item.barcode,
-        matchedName: searchResult[0].item.name 
+        matchedBarcode: topMatch.barcode,
+        matchedName: topMatch.name 
       };
     }
 
@@ -81,14 +89,16 @@ export const calculatePriceComparison = (cart, allPrices) => {
     const missingItems = [];
     
     cartWithMatches.forEach(cartItem => {
-      // Find the price using the BEST match found
-      const priceEntry = allPrices.find(p => 
+      // Find all prices for this chain and this product across branches
+      const branchPrices = allPrices.filter(p => 
         p.chain_id === chainId && 
         (cartItem.matchedBarcode ? p.barcode === cartItem.matchedBarcode : p.name === cartItem.matchedName)
       );
       
-      if (priceEntry) {
-        total += priceEntry.price * (cartItem.quantity || 1);
+      if (branchPrices.length > 0) {
+        // Take the cheapest branch
+        const minBranchPrice = Math.min(...branchPrices.map(p => p.price));
+        total += minBranchPrice * (cartItem.quantity || 1);
       } else {
         missingItems.push(cartItem.name);
       }
@@ -102,5 +112,8 @@ export const calculatePriceComparison = (cart, allPrices) => {
     };
   });
 
-  return comparisonResults.sort((a, b) => parseFloat(a.total) - parseFloat(b.total));
+  // Filter out chains that don't have all products and sort (cheapest first)
+  return comparisonResults
+    .filter(r => r.missingItems.length === 0)
+    .sort((a, b) => parseFloat(a.total) - parseFloat(b.total));
 };

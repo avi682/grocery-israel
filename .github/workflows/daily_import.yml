@@ -2,7 +2,7 @@ name: Daily Price Import
 
 on:
   schedule:
-    - cron: '0 4 * * *' # Every day at 04:00 AM
+    - cron: '0 23 * * *' # Every day at 01:00 AM Israel Time (23:00 UTC)
   workflow_dispatch: # Allows manual trigger
 
 jobs:
@@ -18,10 +18,12 @@ jobs:
           node-version: '20'
 
       - name: Install dependencies
-        run: npm install firebase
+        run: |
+          npm install
+          npm install jsdom
 
-      - name: Run Price Import
-        run: npm run import-prices
+      - name: Run Daily Update
+        run: npm run daily-update
         env:
           FIREBASE_API_KEY: ${{ secrets.FIREBASE_API_KEY }}
           FIREBASE_AUTH_DOMAIN: ${{ secrets.FIREBASE_AUTH_DOMAIN }}

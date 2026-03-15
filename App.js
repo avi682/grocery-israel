@@ -13,7 +13,8 @@ import {
   Alert,
   ActivityIndicator,
   Platform,
-  Clipboard
+  Clipboard,
+  ScrollView
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import uuid from 'react-native-uuid';
@@ -32,6 +33,7 @@ import {
 } from 'firebase/firestore';
 import { db } from './firebaseConfig';
 import { performFuzzySearch, calculatePriceComparison } from './fuzzySearch';
+import { fetchChpPrices, searchChp } from './chpScraper';
 import Fuse from 'fuse.js';
 
 // Constants
@@ -50,6 +52,8 @@ export default function App() {
   const [itemMatches, setItemMatches] = useState({});
   const [shareFeedback, setShareFeedback] = useState(false);
   const [searchLoading, setSearchLoading] = useState(false);
+  const [city, setCity] = useState('פתח תקווה');
+  const [pricesLoading, setPricesLoading] = useState(false);
   const searchTimeout = React.useRef(null);
 
   // 1. Check for list code in URL or storage on mount
@@ -82,30 +86,74 @@ export default function App() {
   useEffect(() => {
     if (!listCode) return;
 
-    // 2a. Fetch only relevant prices for the items ALREADY in the list
+    // 2a. Fetch only relevant prices with persistent caching
     const fetchListPrices = async () => {
-      if (groceryItems.length === 0) return;
+      if (groceryItems.length === 0) {
+        setAllPrices([]);
+        return;
+      }
       try {
-        const barcodes = groceryItems.map(i => i.barcode).filter(Boolean);
-        const names = groceryItems.filter(i => !i.barcode).map(i => i.name);
+        setPricesLoading(true);
+        const barcodes = [...new Set(groceryItems.map(i => i.barcode).filter(Boolean))];
+        const today = new Date().toISOString().split('T')[0]; // Format: YYYY-MM-DD
         
-        let fetchedPrices = [];
+        let allPriceData = [];
+        let barcodesToScrape = [];
         
-        // Fetch by barcode
-        if (barcodes.length > 0) {
-          const q = query(collection(db, 'master_catalog'), where('__name__', 'in', barcodes));
-          const snap = await getDocs(q);
-          snap.forEach(doc => {
-            const data = doc.data();
-            Object.entries(data.prices || {}).forEach(([chainId, price]) => {
-              fetchedPrices.push({ name: data.name, barcode: doc.id, chain_id: chainId, price });
-            });
-          });
+        // 1. Try to fetch from Firestore Master Catalog first
+        const masterCatalogRef = collection(db, 'master_catalog');
+        for (const barcode of barcodes) {
+           const productDoc = await getDocs(query(collection(db, 'master_catalog'), where('__name__', '==', barcode)));
+           let data = null;
+           productDoc.forEach(d => data = { id: d.id, ...d.data() });
+           
+           if (data && data.last_updated === today && data.prices && data.prices.length > 0) {
+             // Data is fresh! Use it.
+             data.prices.forEach(p => allPriceData.push({ ...p, barcode }));
+           } else {
+             // Missing or old data
+             barcodesToScrape.push(barcode);
+           }
         }
         
-        setAllPrices(fetchedPrices);
+        // 2. Scrape what's missing or old
+        if (barcodesToScrape.length > 0) {
+          console.log("Scraping CHP for:", barcodesToScrape);
+          const scrapeResults = await Promise.all(barcodesToScrape.map(b => fetchChpPrices(b, city)));
+          
+          for (let i = 0; i < barcodesToScrape.length; i++) {
+            const barcode = barcodesToScrape[i];
+            const productPrices = scrapeResults[i];
+            const itemInList = groceryItems.find(it => it.barcode === barcode);
+            
+            if (productPrices && productPrices.length > 0) {
+              // Update Master Catalog in Firestore
+              const productRef = doc(db, 'master_catalog', barcode);
+              const cacheData = {
+                name: itemInList?.name || "מוצר",
+                brand: itemInList?.brand || "",
+                last_updated: today,
+                prices: productPrices.map(p => ({
+                  chain_id: p.chain_id,
+                  price: p.price,
+                  branch: p.branch,
+                  deal: p.deal,
+                  name: itemInList?.name || "מוצר"
+                }))
+              };
+              await setDoc(productRef, cacheData, { merge: true });
+              
+              // Add to local state
+              cacheData.prices.forEach(p => allPriceData.push({ ...p, barcode }));
+            }
+          }
+        }
+        
+        setAllPrices(allPriceData);
       } catch (err) {
-        console.error("Error fetching list prices:", err);
+        console.error("Error in cached price fetching:", err);
+      } finally {
+        setPricesLoading(false);
       }
     };
     fetchListPrices();
@@ -289,26 +337,8 @@ export default function App() {
       setSearchLoading(true);
       searchTimeout.current = setTimeout(async () => {
         try {
-          // Firestore prefix search (e.g., "חלב" -> codes starting with "חלב")
-          // Note: This requires a custom approach since Firestore doesn't provide native fuzzy search.
-          // For true scale, we'd use Algolia. For now, we fetch top 30 matches starting with the prefix.
-          const q = query(
-            collection(db, 'master_catalog'),
-            where('name', '>=', text),
-            where('name', '<=', text + '\uf8ff'),
-            limit(30)
-          );
-          const snap = await getDocs(q);
-          const results = snap.docs.map(doc => {
-            const data = doc.data();
-            const prices = Object.values(data.prices || {}).filter(p => p > 0);
-            return {
-              id: doc.id,
-              barcode: doc.id,
-              ...data,
-              minPrice: prices.length > 0 ? Math.min(...prices) : 0
-            };
-          }).filter(r => r.minPrice > 0);
+          // Fetch suggestions from CHP instead of Firestore
+          const results = await searchChp(text);
           setSearchResults(results);
         } catch (e) {
           console.error("Search error:", e);
@@ -380,7 +410,10 @@ export default function App() {
           )}
         </View>
         <View style={{ alignItems: 'flex-end' }}>
-          <Text style={styles.headerTitle}>רשימת הקניות שלי</Text>
+          <View style={{ flexDirection: 'row-reverse', alignItems: 'center' }}>
+            <Text style={styles.headerTitle}>רשימת הקניות שלי</Text>
+            {pricesLoading && <ActivityIndicator size="small" color="#6200ee" style={{ marginRight: 8 }} />}
+          </View>
           <View style={{ flexDirection: 'row-reverse', alignItems: 'center' }}>
             <Text style={styles.headerSubtitle}>קוד רשימה: {listCode}</Text>
             <TouchableOpacity onPress={handleShareLink} style={styles.shareButton}>
@@ -405,17 +438,30 @@ export default function App() {
                 <Text style={[styles.itemText, item.checked && styles.checkedText]}>
                   {item.name}
                 </Text>
-                {/* Show the best price if found via fuzzy match */}
-                {itemMatches[item.name] && (
-                  <Text style={styles.itemPriceLabel}>
-                    מחיר ממוצע: ₪{(allPrices.filter(p => 
-                      itemMatches[item.name].barcode ? p.barcode === itemMatches[item.name].barcode : p.name === itemMatches[item.name].name
-                    ).reduce((acc, curr) => acc + curr.price, 0) / 
-                      (allPrices.filter(p => 
-                        itemMatches[item.name].barcode ? p.barcode === itemMatches[item.name].barcode : p.name === itemMatches[item.name].name
-                      ).length || 1)).toFixed(2)}
-                  </Text>
-                )}
+                {/* Show the best price from real-time CHP data */}
+                {itemMatches[item.name] && (() => {
+                  const relevantPrices = allPrices.filter(p => 
+                    itemMatches[item.name].barcode ? p.barcode === itemMatches[item.name].barcode : p.name === itemMatches[item.name].name
+                  );
+                  
+                  if (relevantPrices.length === 0) return null;
+                  
+                  const minPrice = Math.min(...relevantPrices.map(p => p.price));
+                  const bestOffer = relevantPrices.find(p => p.price === minPrice);
+                  
+                  return (
+                    <View style={{ alignItems: 'flex-end' }}>
+                      <Text style={styles.itemPriceLabel}>
+                        הכי זול: ₪{minPrice.toFixed(2)} ({bestOffer.chain_id})
+                      </Text>
+                      {bestOffer.deal && (
+                        <Text style={[styles.itemPriceLabel, { color: '#40c057', fontSize: 10 }]}>
+                          מבצע: {bestOffer.deal}
+                        </Text>
+                      )}
+                    </View>
+                  );
+                })()}
                 {!itemMatches[item.name] && allPrices.length > 0 && (
                   <Text style={[styles.itemPriceLabel, { color: '#ff4d4f' }]}>
                     לא נמצא מחיר במאגר
@@ -504,10 +550,9 @@ export default function App() {
               keyExtractor={(item) => item.barcode}
               renderItem={({ item }) => (
                 <TouchableOpacity style={styles.searchResultItem} onPress={() => addItemToFirestore(item)}>
-                  <View style={{ alignItems: 'flex-end' }}>
+                  <View style={{ alignItems: 'flex-end', flex: 1 }}>
                      <Text style={styles.resultName}>{item.name}</Text>
-                     <Text style={styles.resultDetail}>{item.brand} • {item.barcode}</Text>
-                     <Text style={styles.searchPrice}>החל מ-₪{item.minPrice.toFixed(2)}</Text>
+                     <Text style={styles.resultDetail}>{item.brand}</Text>
                   </View>
                   <Text style={styles.addIcon}>+</Text>
                 </TouchableOpacity>
